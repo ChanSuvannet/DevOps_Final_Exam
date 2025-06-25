@@ -1,0 +1,117 @@
+---
+- name: Manage Laravel Application Deployment
+  hosts: localhost
+  connection: local
+  vars:
+    pod_name: "laravel-mysql-deployment-7fb5c8b9bc-q476p"
+    db_name: "chansuvannet-db"
+    db_user: "root"
+    db_password: "Hello@123"
+    git_repo: "https://github.com/ChanSuvannet/DevOps_Final_Exam.git"
+    git_branch: "main"
+    backup_dir: "/mnt/c/Users/Asus/ITC NOTED/ITC_24/DevOps-kubernetes/ansible/backups"
+
+  tasks:
+    - name: Check if pod exists
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: "{{ pod_name }}"
+        namespace: default
+      register: pod_info
+      ignore_errors: yes
+
+    - name: Fail if pod doesn't exist
+      fail:
+        msg: "Pod {{ pod_name }} not found"
+      when: pod_info.resources|length == 0
+
+    - name: Pull latest code updates
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: laravel-web
+        command: |
+          sh -c '[ -d /var/www/html/.git ] && cd /var/www/html && git stash && git pull origin {{ git_branch }} || echo "Skipping git pull: not a Git repo"'
+
+    - name: Install Composer dependencies
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: laravel-web
+        command: |
+          sh -c 'cd /var/www/html && 
+          composer install --no-dev --optimize-autoloader'
+
+    - name: Install NPM dependencies and build
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: laravel-web
+        command: |
+          sh -c 'cd /var/www/html && 
+          npm install'
+
+    - name: Run tests with SQLite
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: laravel-web
+        command: >
+          sh -c '
+          cd /var/www/html &&
+          cp .env .env.backup &&
+          cat > .env.testing <<EOF
+            DB_CONNECTION=sqlite
+            DB_DATABASE=/var/www/html/database/database.sqlite
+            EOF
+          ;
+          touch database/database.sqlite &&
+          php artisan config:clear &&
+          php artisan test --env=testing &&
+          mv .env.backup .env'
+
+    - name: Generate backup timestamp
+      command: date +%Y%m%d%H%M%S
+      register: backup_date_output
+
+    - name: Set backup filename
+      set_fact:
+        backup_timestamp: "{{ backup_date_output.stdout }}"
+        backup_filename: "backup-{{ backup_date_output.stdout }}.sql.gz" # Note the .gz extension
+
+    - name: Backup MySQL database (fixed version)
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: mysql-db
+        command: >
+          sh -c '
+          export MYSQL_PWD={{ db_password }};
+          mysqldump -u {{ db_user }} {{ db_name }} > /var/lib/mysql/{{ backup_filename }} 2>/tmp/mysqldump.error;
+          if [ $? -ne 0 ]; then
+            cat /tmp/mysqldump.error;
+            exit 1;
+          fi;
+          gzip -f /var/lib/mysql/{{ backup_filename }};
+          ls -lh /var/lib/mysql/{{ backup_filename }}.gz'
+      register: backup_result
+      ignore_errors: yes
+
+    - name: Debug backup result
+      debug:
+        var: backup_result
+      when: backup_result is failed
+
+    - name: Verify backup file exists
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: mysql-db
+        command: "test -f /var/lib/mysql/{{ backup_filename }}.gz && echo 'Backup successful' || echo 'Backup failed'"
+      register: backup_verify
+      when: backup_result is failed
+
+    - name: Show verification result
+      debug:
+        var: backup_verify
+      when: backup_result is failed
