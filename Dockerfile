@@ -1,54 +1,64 @@
 FROM php:8.2-fpm
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    nginx \
     git \
-    openssh-server \
-    zip unzip \
-    libzip-dev \
+    unzip \
+    nginx \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
-    && docker-php-ext-install pdo_mysql zip mbstring exif pcntl bcmath gd
+    libzip-dev \
+    netcat-openbsd \
+    curl \
+    && docker-php-ext-install pdo pdo_mysql mbstring exif pcntl bcmath gd zip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
 
-# Fix Git ownership issue and clone repository
-RUN git config --global --add safe.directory /var/www/html && \
-    rm -rf /var/www/html/* && \
-    git clone https://github.com/ChanSuvannet/DevOps_Final_Exam.git /var/www/html && \
-    cd /var/www/html && \
-    composer install --optimize-autoloader && \
-    chown -R www-data:www-data /var/www/html && \
-    chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+# Configure nginx
+COPY nginx.conf /etc/nginx/sites-available/default
+RUN ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
-# Create .env file
-RUN cd /var/www/html && \
-    printf '%s\n' \
-'APP_NAME=Laravel' \
-'APP_ENV=production' \
-'APP_KEY=' \
-'APP_DEBUG=false' \
-'APP_URL=http://localhost' \
-'' \
-'DB_CONNECTION=mysql' \
-'DB_HOST=127.0.0.1' \
-'DB_PORT=3306' \
-'DB_DATABASE=chansuvannet-db' \
-'DB_USERNAME=root' \
-'DB_PASSWORD=Hello@123' \
-> .env
+# Remove default nginx configuration
+RUN rm -f /etc/nginx/sites-enabled/default-original
 
-# Install Pest and initialize
-RUN cd /var/www/html && \
-    composer require pestphp/pest pestphp/pest-plugin-laravel --dev && \
-    ./vendor/bin/pest --init
+# Setup application directory
+RUN rm -rf /var/www/html/*
+WORKDIR /var/www/html
 
-COPY default.conf /etc/nginx/conf.d/default.conf
+# Clone application (in production, use COPY instead)
+RUN git clone https://github.com/ChanSuvannet/DevOps_Final_Exam.git /var/www/html-tmp \
+    && mv /var/www/html-tmp/* /var/www/html/ \
+    && mv /var/www/html-tmp/.[!.]* /var/www/html/ 2>/dev/null || true \
+    && rm -rf /var/www/html-tmp
 
-RUN mkdir /var/run/sshd
+# Install PHP dependencies
+RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-EXPOSE 8080 22
+# Set proper permissions
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html \
+    && chmod -R 775 /var/www/html/storage \
+    && chmod -R 775 /var/www/html/bootstrap/cache
 
-CMD ["sh", "-c", "service ssh start && nginx && php-fpm"]
+# Copy entrypoint script
+COPY entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Create PHP-FPM configuration
+RUN echo "pm.max_children = 50" >> /usr/local/etc/php-fpm.d/www.conf \
+    && echo "pm.start_servers = 5" >> /usr/local/etc/php-fpm.d/www.conf \
+    && echo "pm.min_spare_servers = 5" >> /usr/local/etc/php-fpm.d/www.conf \
+    && echo "pm.max_spare_servers = 10" >> /usr/local/etc/php-fpm.d/www.conf
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080 || exit 1
+
+ENTRYPOINT ["entrypoint.sh"]

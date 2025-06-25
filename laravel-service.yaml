@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-service
+  labels:
+    app: laravel-mysql
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: laravel-mysql
+
+---
+# Optional: ClusterIP service for internal communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-internal-service
+  labels:
+    app: laravel-mysql
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: laravel-mysql
+
+---
+# Optional: NodePort service for development/testing
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-nodeport-service
+  labels:
+    app: laravel-mysql
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      nodePort: 30080 # Access via <node-ip>:30080
+      protocol: TCP
+  selector:
+    app: laravel-mysql
+
+---
+# Optional: Ingress for domain-based routing
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: laravel-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Add SSL/TLS annotations if needed
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  # Uncomment for HTTPS
+  # tls:
+  # - hosts:
+  #   - your-domain.com
+  #   secretName: laravel-tls
+  rules:
+    - host: laravel.local # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: laravel-service
+                port:
+                  number: 80

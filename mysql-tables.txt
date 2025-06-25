@@ -1,1 +1,16 @@
-mysql: [Warning] Using a password on the command line interface can be insecure.
+Tables_in_chansuvannet-db
+bookings
+cache
+cache_locks
+failed_jobs
+favorites
+job_batches
+jobs
+migrations
+password_reset_tokens
+payments
+reviews
+sessions
+terrain_images
+terrains
+users

@@ -1,0 +1,229 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laravel-mysql-deployment
+  labels:
+    app: laravel-mysql
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Use Recreate for single-pod with persistent volume
+  selector:
+    matchLabels:
+      app: laravel-mysql
+  template:
+    metadata:
+      labels:
+        app: laravel-mysql
+    spec:
+      securityContext:
+        fsGroup: 33  # www-data group ID
+      containers:
+        # MySQL Database Container
+        - name: mysql-db
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: "chansuvannet-db"
+            - name: MYSQL_USER
+              value: "laravel"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: user-password
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql
+            - name: mysql-config
+              mountPath: /etc/mysql/conf.d
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+                - -u
+                - root
+                - -p$MYSQL_ROOT_PASSWORD
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+                - -u
+                - root
+                - -p$MYSQL_ROOT_PASSWORD
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+        
+        # Laravel Web Application Container
+        - name: laravel-web
+          image: net168/laravel-custom:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: APP_DEBUG
+              value: "false"
+            - name: APP_URL
+              value: "http://localhost"
+            - name: DB_HOST
+              value: "localhost"  # Same pod communication
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_DATABASE
+              value: "chansuvannet-db"
+            - name: DB_USERNAME
+              value: "laravel"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: user-password
+            - name: RUN_MIGRATIONS
+              value: "true"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          volumeMounts:
+            - name: laravel-storage
+              mountPath: /var/www/html/storage/app
+            - name: laravel-logs
+              mountPath: /var/www/html/storage/logs
+      
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+        - name: mysql-config
+          configMap:
+            name: mysql-config
+        - name: laravel-storage
+          persistentVolumeClaim:
+            claimName: laravel-storage-pvc
+        - name: laravel-logs
+          emptyDir: {}
+
+---
+# MySQL Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+type: Opaque
+data:
+  root-password: SGVsbG9AMTIz  # Base64 encoded "Hello@123"
+  user-password: bGFyYXZlbA==  # Base64 encoded "laravel"
+
+---
+# MySQL PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard  # Adjust based on your cluster
+
+---
+# Laravel Storage PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: laravel-storage-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard  # Adjust based on your cluster
+
+---
+# MySQL Configuration ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+data:
+  my.cnf: |
+    [mysqld]
+    innodb_buffer_pool_size = 256M
+    max_connections = 100
+    query_cache_size = 32M
+    query_cache_type = 1
+    slow_query_log = 1
+    slow_query_log_file = /var/log/mysql/slow.log
+    long_query_time = 2
+    
+    # Security settings
+    local_infile = 0
+    symbolic-links = 0
+    
+    # Performance tuning
+    innodb_log_file_size = 64M
+    innodb_log_buffer_size = 16M
+    key_buffer_size = 32M
+    table_open_cache = 256
+    sort_buffer_size = 1M
+    read_buffer_size = 1M
+    read_rnd_buffer_size = 4M
+    myisam_sort_buffer_size = 64M
+    thread_cache_size = 8
+    tmp_table_size = 32M
+    max_heap_table_size = 32M
