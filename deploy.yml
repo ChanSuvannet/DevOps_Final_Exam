@@ -1,0 +1,20 @@
+---
+- name: Deploy Application
+  hosts: webservers
+  become: yes
+  vars:
+    build_dir: "/var/www/app"
+    build_number: "{{ build_number }}"
+
+  tasks:
+    - name: Ensure deployment directory exists
+      file:
+        path: "{{ build_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy build artifacts
+      copy:
+        src: "build/"
+        dest: "{{ build_dir }}"
+        remote_src: no
